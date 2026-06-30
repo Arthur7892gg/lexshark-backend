@@ -1,0 +1,207 @@
+// ============================================================
+// LEXSHARK - SCHEMA MULTI-TENANT (PostgreSQL)
+// Toda tabela de domínio carrega office_id para isolamento total.
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ------------------------------------------------------------
+// ESCRITÓRIO (TENANT)
+// ------------------------------------------------------------
+model Office {
+  id        String   @id @default(uuid())
+  name      String
+  document  String?  @unique // CNPJ
+  plan      String   @default("trial")
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  users       User[]
+  clients     Client[]
+  cases       CaseFile[]
+  tasks       Task[]
+  agendaItems AgendaItem[]
+  messages    Message[]
+  permissions Permission[]
+  backups     BackupLog[]
+
+  @@map("offices")
+}
+
+// ------------------------------------------------------------
+// USUÁRIO
+// ------------------------------------------------------------
+model User {
+  id           String   @id @default(uuid())
+  officeId     String   @map("office_id")
+  office       Office   @relation(fields: [officeId], references: [id], onDelete: Cascade)
+  name         String
+  email        String
+  passwordHash String   @map("password_hash")
+  role         Role     @default(MEMBER)
+  blocked      Boolean  @default(false)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  permissions    Permission[]
+  tasksOwned     Task[]       @relation("TaskOwner")
+  tasksCreated   Task[]       @relation("TaskCreator")
+  agendaItems    AgendaItem[]
+  messagesSent   Message[]    @relation("MessageSender")
+
+  @@unique([officeId, email])
+  @@index([officeId])
+  @@map("users")
+}
+
+enum Role {
+  ADMIN
+  MEMBER
+}
+
+// ------------------------------------------------------------
+// PERMISSÕES (flexíveis, por usuário)
+// ------------------------------------------------------------
+model Permission {
+  id       String  @id @default(uuid())
+  officeId String  @map("office_id")
+  office   Office  @relation(fields: [officeId], references: [id], onDelete: Cascade)
+  userId   String  @map("user_id")
+  user     User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  key      String  // ex: "view_case_values", "edit_cases", "create_tasks",
+                    //     "view_others_tasks", "manage_team", "edit_agenda",
+                    //     "export_backup", "import_backup", "financial_dashboard"
+  allowed  Boolean @default(true)
+
+  @@unique([userId, key])
+  @@index([officeId])
+  @@map("permissions")
+}
+
+// ------------------------------------------------------------
+// CLIENTES
+// ------------------------------------------------------------
+model Client {
+  id        String     @id @default(uuid())
+  officeId  String     @map("office_id")
+  office    Office     @relation(fields: [officeId], references: [id], onDelete: Cascade)
+  name      String
+  document  String?
+  email     String?
+  phone     String?
+  notes     String?
+  data      Json?      // payload livre vindo do frontend (compatibilidade total)
+  createdAt DateTime   @default(now()) @map("created_at")
+  updatedAt DateTime   @updatedAt @map("updated_at")
+  cases     CaseFile[]
+
+  @@index([officeId])
+  @@map("clients")
+}
+
+// ------------------------------------------------------------
+// PROCESSOS
+// ------------------------------------------------------------
+model CaseFile {
+  id        String   @id @default(uuid())
+  officeId  String   @map("office_id")
+  office    Office   @relation(fields: [officeId], references: [id], onDelete: Cascade)
+  clientId  String?  @map("client_id")
+  client    Client?  @relation(fields: [clientId], references: [id])
+  number    String?
+  status    String?
+  value     Decimal? @db.Decimal(14, 2)
+  data      Json?    // payload livre (mantém compatibilidade com estrutura atual do frontend)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([officeId])
+  @@map("cases")
+}
+
+// ------------------------------------------------------------
+// TAREFAS
+// ------------------------------------------------------------
+model Task {
+  id          String     @id @default(uuid())
+  officeId    String     @map("office_id")
+  office      Office     @relation(fields: [officeId], references: [id], onDelete: Cascade)
+  title       String
+  description String?
+  status      TaskStatus @default(PENDING)
+  dueDate     DateTime?  @map("due_date")
+  ownerId     String     @map("owner_id")
+  owner       User       @relation("TaskOwner", fields: [ownerId], references: [id])
+  createdById String     @map("created_by_id")
+  createdBy   User       @relation("TaskCreator", fields: [createdById], references: [id])
+  createdAt   DateTime   @default(now()) @map("created_at")
+  updatedAt   DateTime   @updatedAt @map("updated_at")
+
+  @@index([officeId])
+  @@index([ownerId])
+  @@map("tasks")
+}
+
+enum TaskStatus {
+  PENDING
+  IN_PROGRESS
+  DONE
+}
+
+// ------------------------------------------------------------
+// AGENDA
+// ------------------------------------------------------------
+model AgendaItem {
+  id        String   @id @default(uuid())
+  officeId  String   @map("office_id")
+  office    Office   @relation(fields: [officeId], references: [id], onDelete: Cascade)
+  userId    String?  @map("user_id")
+  user      User?    @relation(fields: [userId], references: [id])
+  title     String
+  startsAt  DateTime @map("starts_at")
+  endsAt    DateTime? @map("ends_at")
+  data      Json?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([officeId])
+  @@map("agenda")
+}
+
+// ------------------------------------------------------------
+// MENSAGENS (tempo real)
+// ------------------------------------------------------------
+model Message {
+  id         String   @id @default(uuid())
+  officeId   String   @map("office_id")
+  office     Office   @relation(fields: [officeId], references: [id], onDelete: Cascade)
+  senderId   String   @map("sender_id")
+  sender     User     @relation("MessageSender", fields: [senderId], references: [id])
+  content    String
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([officeId])
+  @@map("messages")
+}
+
+// ------------------------------------------------------------
+// LOG DE BACKUP (importação/exportação)
+// ------------------------------------------------------------
+model BackupLog {
+  id        String   @id @default(uuid())
+  officeId  String   @map("office_id")
+  office    Office   @relation(fields: [officeId], references: [id], onDelete: Cascade)
+  type      String   // "export" | "import"
+  fileName  String?  @map("file_name")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([officeId])
+  @@map("backup_logs")
+}
